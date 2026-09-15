@@ -20,38 +20,69 @@ Claude can't reliably notify you that it stopped, because by the time it stops
 it is no longer running. Claude Code's harness fires `Stop` and `Notification`
 hooks, and `scripts/ntfy_notify.py` turns each hook payload into a push.
 
-The bundled `SKILL.md` exists so Claude can install, configure, and troubleshoot
+The bundled skill (`skills/ntfy-notify/`) exists so Claude can install, configure, and troubleshoot
 the thing on request — but the hooks are what actually do the work.
 
 ## Requirements
 
 - Claude Code
-- Python 3.8+ (standard library only — no dependencies)
+- Python 3.8+ on PATH as `python3` (standard library only — no dependencies)
 - A ntfy topic, either on [ntfy.sh](https://ntfy.sh) or a self-hosted server
 
 ## Install
 
-```bash
-git clone https://github.com/<you>/claude-ntfy.git
+```
+/plugin marketplace add AvAl4nch/claude-ntfy
+/plugin install claude-ntfy
 ```
 
-Point the two hooks at the script in `~/.claude/settings.json`, merging with
-whatever is already there:
+Then tell Claude your topic:
+
+> use https://ntfy.sh/my-topic as the ntfy server
+
+That's it. The plugin registers the `Stop` and `Notification` hooks itself, so
+there is no `settings.json` to edit and no absolute path to get wrong.
+
+**Nothing is sent until you set a topic.** There is no default on purpose: a
+baked-in URL would mean an unconfigured install publishes to a topic someone else
+owns, and ntfy topics are public by default, so that would leak your work
+summaries to strangers. Unconfigured, the script sends nothing and says so in its
+log.
+
+Check it worked at any time:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ntfy_notify.py" --doctor
+```
+
+That reports your interpreter, your config, which hooks are actually live, and
+whether the server is reachable. It publishes at minimum priority, so it won't
+buzz your phone.
+
+<details>
+<summary>Manual install, without the plugin system</summary>
+
+For using the script on its own. Clone it, then merge both hooks into
+`~/.claude/settings.json`:
+
+```bash
+git clone https://github.com/AvAl4nch/claude-ntfy.git
+```
 
 ```json
 {
   "hooks": {
     "Stop": [
       { "hooks": [ {
-          "type": "command", "command": "python",
-          "args": ["/abs/path/to/ntfy-notify/scripts/ntfy_notify.py"],
+          "type": "command", "command": "python3",
+          "args": ["/abs/path/to/claude-ntfy/scripts/ntfy_notify.py"],
           "async": true, "timeout": 30
       } ] }
     ],
     "Notification": [
       { "hooks": [ {
-          "type": "command", "command": "python",
-          "args": ["/abs/path/to/ntfy-notify/scripts/ntfy_notify.py"],
+          "type": "command", "command": "python3",
+          "args": ["/abs/path/to/claude-ntfy/scripts/ntfy_notify.py"],
           "async": true, "timeout": 30
       } ] }
     ]
@@ -61,29 +92,35 @@ whatever is already there:
 
 The `args` exec form spawns the interpreter directly, so Windows paths with
 spaces or backslashes never reach a shell parser. `async: true` keeps the push
-off the critical path — your turn ends immediately and the notification follows.
+off the critical path. Merge carefully - a malformed `settings.json` silently
+disables every setting in that file, not just the hook.
 
-Then set your topic in `~/.claude/ntfy-notify.json`:
+Set your topic in `~/.claude/ntfy-notify.json`:
 
 ```json
 { "url": "https://ntfy.sh/your-topic-here", "summarizer": "heuristic" }
 ```
 
-**There is no default topic on purpose.** A baked-in URL would mean an
-unconfigured install silently publishes to a topic someone else owns — and ntfy
-topics are public by default, so that would leak your work summaries to
-strangers. Unconfigured, the script sends nothing and says so in its log.
-
-To drop the skill into Claude Code so it can manage itself, symlink it:
+To let Claude manage the thing for you, link the skill in as well:
 
 ```bash
-ln -s /abs/path/to/ntfy-notify ~/.claude/skills/ntfy-notify
-# Windows: New-Item -ItemType Junction -Path "$HOME\.claude\skills\ntfy-notify" -Target <repo>
+ln -s /abs/path/to/claude-ntfy/skills/ntfy-notify ~/.claude/skills/ntfy-notify
 ```
+
+On Windows use a junction instead:
+
+```powershell
+New-Item -ItemType Junction -Path "$HOME\.claude\skills\ntfy-notify" -Target "<repo>\skills\ntfy-notify"
+```
+
+Don't do both - plugin hooks and manual hooks both fire, so every event pushes
+twice. `--doctor` detects that.
+
+</details>
 
 ## Just tell Claude
 
-Once the skill is linked into `~/.claude/skills/`, you don't have to edit any of
+Installing the plugin also installs the skill, so you don't have to edit any of
 this by hand. Claude reads `SKILL.md` and makes the change for you — say what you
 want in plain language:
 
@@ -135,13 +172,13 @@ Dry-run, so testing never spams your phone:
 
 ```bash
 echo '{"hook_event_name":"Stop","cwd":"/p/demo","last_assistant_message":"Fixed the flaky login test."}' \
-  | python scripts/ntfy_notify.py --dry-run
+  | python3 scripts/ntfy_notify.py --dry-run
 ```
 
 One real send:
 
 ```bash
-python scripts/ntfy_notify.py --test
+python3 scripts/ntfy_notify.py --test
 ```
 
 `evals/payloads.jsonl` holds sample payloads covering prose, markdown tables,

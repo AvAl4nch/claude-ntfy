@@ -1,0 +1,32 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/ntfy_notify.py"],
+            "async": true,
+            "timeout": 30,
+            "statusMessage": "Pushing ntfy notification"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/ntfy_notify.py"],
+            "async": true,
+            "timeout": 30,
+            "statusMessage": "Pushing ntfy notification"
+          }
+        ]
+      }
+    ]
+  }
+}

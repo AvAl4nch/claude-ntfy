@@ -1,0 +1,14 @@
+{
+  "name": "claude-ntfy",
+  "owner": {
+    "name": "AvA_l4nch",
+    "url": "https://github.com/AvAl4nch"
+  },
+  "plugins": [
+    {
+      "name": "claude-ntfy",
+      "source": "./",
+      "description": "Push a ntfy notification to your phone when Claude Code finishes a turn or needs your input, with a short summary of the result."
+    }
+  ]
+}

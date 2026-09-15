@@ -305,6 +305,100 @@ def publish(url, token, fields):
         return False, "{0}: {1}".format(type(exc).__name__, exc)
 
 
+def doctor(url, token, summarizer):
+    """Explain why notifications are or aren't arriving.
+
+    Worth having because this script is deliberately silent on failure: without
+    a self-check, "it stopped working" means reading a log you don't know exists.
+    """
+    import shutil
+
+    ok = True
+    print("interpreter")
+    for name in ("python3", "python"):
+        path = shutil.which(name)
+        print("  {0:<8} {1}".format(name, path or "not found"))
+    print("  running  {0}".format(sys.executable))
+
+    print("\nconfig")
+    print("  file       {0}{1}".format(CONFIG_PATH, "" if CONFIG_PATH.exists() else "  (absent)"))
+    print("  topic URL  {0}".format(url or "NOT SET -- nothing will be sent"))
+    print("  token      {0}".format("set" if token else "none (public topic)"))
+    print("  summarizer {0}".format(summarizer))
+    if not url:
+        ok = False
+    if summarizer == "llm" and not shutil.which("claude"):
+        print("  WARNING: summarizer is 'llm' but the claude CLI is not on PATH;"
+              " every summary will fall back to the heuristic")
+
+    print("\nhook registration")
+    found = []
+    settings = Path.home() / ".claude" / "settings.json"
+    try:
+        data = json.loads(settings.read_text(encoding="utf-8"))
+        for event, groups in (data.get("hooks") or {}).items():
+            for group in groups:
+                for h in group.get("hooks", []):
+                    blob = "{0} {1}".format(h.get("command", ""), " ".join(h.get("args") or []))
+                    if "ntfy_notify" in blob:
+                        found.append("{0} (settings.json)".format(event))
+    except Exception:
+        pass
+    # A hooks.json in the checkout is not the same as an installed plugin -- it is
+    # only live when this copy is the one Claude Code installed under ~/.claude/plugins.
+    here = Path(__file__).resolve()
+    plugin_root = here.parent.parent
+    plugins_dir = (Path.home() / ".claude" / "plugins").resolve()
+    installed = plugins_dir in here.parents
+    plugin_events = []
+    plugin_hooks = plugin_root / "hooks" / "hooks.json"
+    if plugin_hooks.exists():
+        try:
+            plugin_events = list((json.loads(plugin_hooks.read_text(encoding="utf-8"))
+                                  .get("hooks") or {}))
+        except Exception:
+            pass
+    if plugin_events:
+        if installed:
+            found += ["{0} (plugin)".format(e) for e in plugin_events]
+        else:
+            print("  note: this checkout ships plugin hooks for {0}, but it is not"
+                  " installed via /plugin, so they are inactive"
+                  .format(", ".join(sorted(plugin_events))))
+
+    if found:
+        for f in sorted(set(found)):
+            print("  {0}".format(f))
+        if any("settings.json" in f for f in found) and any("(plugin)" in f for f in found):
+            print("  WARNING: registered BOTH ways -- you will get duplicate pushes."
+                  " Remove the settings.json entries, or uninstall the plugin.")
+    else:
+        print("  none active -- install the plugin, or register the hooks manually")
+        ok = False
+
+    print("\nconnectivity")
+    if url:
+        sent, detail = publish(url, token, {
+            "title": "ntfy-notify doctor",
+            "body": "Self-check reached the server",
+            "tags": "stethoscope", "priority": "1",  # min priority: no buzz
+        })
+        print("  publish    {0}".format(detail))
+        ok = ok and sent
+    else:
+        print("  publish    skipped (no URL)")
+
+    print("\nrecent errors ({0})".format(LOG_PATH))
+    try:
+        tail = LOG_PATH.read_text(encoding="utf-8").strip().splitlines()[-3:]
+        print("\n".join("  " + t for t in tail) if tail else "  (none)")
+    except Exception:
+        print("  (no log file -- nothing has failed yet)")
+
+    print("\n{0}".format("OK" if ok else "PROBLEMS FOUND (see above)"))
+    return 0 if ok else 1
+
+
 def main():
     ap = argparse.ArgumentParser(description="ntfy notifier for Claude Code hooks")
     ap.add_argument("--url", help="ntfy topic URL")
@@ -314,6 +408,8 @@ def main():
     ap.add_argument("--event", help="override hook_event_name (Stop | Notification)")
     ap.add_argument("--dry-run", action="store_true", help="print, do not send")
     ap.add_argument("--test", action="store_true", help="send a synthetic test push")
+    ap.add_argument("--doctor", action="store_true",
+                    help="diagnose config, hook registration and connectivity")
     args = ap.parse_args()
 
     cfg = load_config()
@@ -321,6 +417,9 @@ def main():
     token = args.token or os.environ.get("NTFY_CLAUDE_TOKEN") or cfg.get("token")
     summarizer = (args.summarizer or os.environ.get("NTFY_CLAUDE_SUMMARIZER")
                   or cfg.get("summarizer") or DEFAULT_SUMMARIZER)
+
+    if args.doctor:
+        return doctor(url, token, summarizer)
 
     session_id = None
     state = {}

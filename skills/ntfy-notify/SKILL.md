@@ -27,21 +27,34 @@ not the script.
 
 ## Install
 
-1. Point the hooks at the script in `~/.claude/settings.json`:
+The plugin is the normal path. It registers the hooks itself, so there is no
+`settings.json` editing and no absolute paths to get wrong:
+
+```
+/plugin marketplace add AvAl4nch/claude-ntfy
+/plugin install claude-ntfy
+```
+
+Then set the topic (see Configure). Nothing is sent until one is set.
+
+### Manual install, without the plugin system
+
+Only for someone who wants the script alone. Register both hooks in
+`~/.claude/settings.json`, merging into whatever is already there:
 
 ```json
 {
   "hooks": {
     "Stop": [
       { "hooks": [ {
-          "type": "command", "command": "python",
+          "type": "command", "command": "python3",
           "args": ["<abs-path>/scripts/ntfy_notify.py"],
           "async": true, "timeout": 30
       } ] }
     ],
     "Notification": [
       { "hooks": [ {
-          "type": "command", "command": "python",
+          "type": "command", "command": "python3",
           "args": ["<abs-path>/scripts/ntfy_notify.py"],
           "async": true, "timeout": 30
       } ] }
@@ -50,16 +63,22 @@ not the script.
 }
 ```
 
-   Use the `args` exec form rather than a single shell string: it spawns the
-   interpreter directly, so Windows paths with spaces or backslashes never reach
-   a shell parser. `async: true` keeps the push off the critical path — the turn
-   ends immediately and the notification follows.
+Three things to get right, each of which has bitten this setup:
 
-2. Merge, never overwrite. If `hooks.Stop` already exists, append to the array.
+- **Use the `args` exec form**, not one shell string. It spawns the interpreter
+  directly, so Windows paths with spaces or backslashes never reach a parser.
+- **Merge, never overwrite.** A malformed `settings.json` silently disables every
+  setting in that file, not just the hook -- so the blast radius of a bad edit is
+  much larger than it looks.
+- **`timeout` must clear the summarizer.** The `llm` summarizer can take 20s; a
+  shorter timeout kills it mid-call and the notification is lost silently.
 
-3. Settings are watched live, but a session that started before the file existed
-   may not pick it up. If the hook does not fire, have the user open `/hooks`
-   once or restart. You cannot open `/hooks` yourself — it ends the turn.
+Settings are watched live, but a session that started before the file existed may
+not pick them up. If nothing fires, have the user open `/hooks` once or restart.
+You cannot open `/hooks` yourself -- it ends the turn.
+
+Never register both ways at once: the plugin hooks and manual hooks both fire, so
+every event pushes twice. `--doctor` detects this.
 
 ## Configure
 
@@ -88,17 +107,25 @@ be a deliberate choice.
 
 ## Verify
 
+Start with the self-check -- it reports interpreter, config, which hooks are
+actually live, and whether the server is reachable, and it publishes at minimum
+priority so it will not buzz the user's phone:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ntfy_notify.py" --doctor
+```
+
 Always dry-run before sending, so testing never spams the user's phone:
 
 ```bash
 echo '{"hook_event_name":"Stop","cwd":"/p/demo","last_assistant_message":"Fixed the flaky login test."}' \
-  | python scripts/ntfy_notify.py --dry-run
+  | python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ntfy_notify.py" --dry-run
 ```
 
 Then one real send:
 
 ```bash
-python scripts/ntfy_notify.py --test
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ntfy_notify.py" --test
 ```
 
 Confirm it landed by polling the topic — a 200 on publish only proves the server

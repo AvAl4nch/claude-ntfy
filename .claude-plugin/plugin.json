@@ -1,0 +1,20 @@
+{
+  "name": "claude-ntfy",
+  "displayName": "Claude ntfy",
+  "version": "1.0.0",
+  "description": "Push a ntfy notification to your phone when Claude Code finishes a turn or needs your input, with a short summary of the result.",
+  "author": {
+    "name": "AvA_l4nch",
+    "url": "https://github.com/AvAl4nch"
+  },
+  "homepage": "https://github.com/AvAl4nch/claude-ntfy",
+  "repository": "https://github.com/AvAl4nch/claude-ntfy",
+  "license": "MIT",
+  "keywords": [
+    "ntfy",
+    "notifications",
+    "push",
+    "hooks",
+    "mobile"
+  ]
+}
