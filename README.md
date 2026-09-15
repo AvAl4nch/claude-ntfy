@@ -182,7 +182,7 @@ A few things it commonly catches:
 | `HTTP 403` in the log | A firewall or WAF — Cloudflare especially — rejecting the request. |
 | `HTTP 401` on a private topic | Missing, wrong, or stripped credentials. `--doctor` distinguishes the three. |
 | Publish says 200, phone stays quiet | It reached the server fine. Check the app is subscribed to that exact topic and allowed to notify in the background. |
-| Two pushes for everything | The hooks are registered twice, usually plugin *and* manual. `--doctor` warns about this. |
+| Nothing arrives, but config looks right | Hooks load when a session *starts*. A session already running when you installed the plugin doesn't have them — restart it. `--doctor` shows when the last real send was, which makes this obvious. |
 
 ## How it behaves, and why
 
@@ -191,6 +191,18 @@ event about a minute after a turn ends, which would otherwise mean a "finished"
 push immediately followed by a "waiting for your input" push about the same
 standstill. The second one is dropped. It still comes through when it's genuinely
 the first thing worth telling you, and any real event resets that.
+
+**Registering it twice is safe.** If both the plugin hooks and hand-written
+`settings.json` hooks are live, they fire within microseconds of each other — so
+the two processes race for an atomic lock and only the winner sends. You get one
+push, not two. Different events with similar wording (two permission prompts in a
+row) are still told apart, because the fingerprint is taken from the raw payload
+rather than the shortened summary.
+
+**Hooks load at session start.** Installing or changing them doesn't affect a
+session that's already running, which is the single most confusing failure here:
+the config is right, `--doctor` finds the hooks, and nothing arrives. Restart the
+session. `--doctor` reports the last real send so you can spot it.
 
 **It ignores the boring events.** Login confirmations and quota messages fire on
 their own schedule and aren't worth a buzz, so only the ones needing a human get

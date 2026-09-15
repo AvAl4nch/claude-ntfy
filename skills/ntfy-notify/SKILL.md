@@ -77,8 +77,8 @@ Settings are watched live, but a session that started before the file existed ma
 not pick them up. If nothing fires, have the user open `/hooks` once or restart.
 You cannot open `/hooks` yourself -- it ends the turn.
 
-Never register both ways at once: the plugin hooks and manual hooks both fire, so
-every event pushes twice. `--doctor` detects this.
+Registering both ways is redundant but no longer harmful: the two processes race
+for an atomic lock and only one sends. `--doctor` points it out.
 
 ## Configure
 
@@ -183,6 +183,7 @@ credentials entered in their phone's ntfy app.
 
 | Symptom | Cause |
 |---|---|
+| Config is right but nothing arrives | Hooks load at session START. A session already running when the plugin was installed has none of them -- the user must restart. Check `--doctor`'s "last real send": if it predates the install, this is it. |
 | Nothing fires at all | Hook not registered, or session predates the settings file. Check `jq '.hooks.Stop' ~/.claude/settings.json`, then `/hooks` or restart. |
 | Log shows `HTTP 403` | A WAF (commonly Cloudflare) rejecting the client. The script sends its own `User-Agent` because the `Python-urllib/3.x` default gets blocked. |
 | Log shows `HTTP 401/403` on a private topic | Run `--doctor`: it retries the other `auth_mode` and reports whether the credentials are wrong, absent, or being stripped in transit by a proxy. |

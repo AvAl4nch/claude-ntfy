@@ -45,6 +45,11 @@ CONFIG_PATH = Path.home() / ".claude" / "ntfy-notify.json"
 LOG_PATH = Path.home() / ".claude" / "ntfy-notify.log"
 STATE_PATH = Path.home() / ".claude" / "ntfy-notify.state.json"
 STATE_TTL = 24 * 3600  # forget sessions after a day so the file cannot grow forever
+LOCK_DIR = Path.home() / ".claude" / "ntfy-notify.locks"
+# If the same notification is produced twice inside this window it is a duplicate
+# registration (plugin hooks AND settings.json hooks both live), not two real
+# events. Claude Code never legitimately ends the same turn twice this fast.
+DUPLICATE_WINDOW = 15
 
 # Notification types that mean "a human needs to do something".
 # Anything else (auth_success, quota_* chatter) is just noise on a phone.
@@ -235,6 +240,55 @@ def load_config():
         return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
     except Exception:
         return {}
+
+
+def claim_send(payload):
+    """Claim the right to send this notification. False means it's a duplicate.
+
+    Two hook registrations (a plugin's and a hand-written settings.json entry)
+    both fire for the same event, microseconds apart. Checking a timestamp is not
+    enough -- both processes read the old state before either writes it. O_EXCL
+    file creation is atomic, so exactly one process wins the race and the other
+    stays quiet. That makes belt-and-braces registration harmless rather than a
+    reason to get every notification twice.
+    """
+    import hashlib
+    import time
+
+    # Fingerprint the RAW payload, never the rendered summary. Two different
+    # permission prompts ("use Bash", "use Write") both truncate to the same six
+    # words, so hashing the summary would silently swallow the second one.
+    fingerprint = "|".join([
+        payload.get("session_id") or "-",
+        payload.get("hook_event_name") or "-",
+        payload.get("notification_type") or "-",
+        payload.get("message") or "",
+        payload.get("last_assistant_message") or "",
+    ])
+    digest = hashlib.sha1(fingerprint.encode("utf-8")).hexdigest()[:16]
+    try:
+        LOCK_DIR.mkdir(parents=True, exist_ok=True)
+        now = time.time()
+        # Opportunistically clear locks nobody will look at again.
+        for stale in LOCK_DIR.glob("*.lock"):
+            try:
+                if now - stale.stat().st_mtime > DUPLICATE_WINDOW * 4:
+                    stale.unlink()
+            except OSError:
+                pass
+        lock = LOCK_DIR / (digest + ".lock")
+        try:
+            fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.close(fd)
+            return True
+        except FileExistsError:
+            age = now - lock.stat().st_mtime
+            if age < DUPLICATE_WINDOW:
+                return False          # the other registration is sending it
+            lock.touch()              # stale: a genuine repeat, let it through
+            return True
+    except Exception:
+        return True  # never let dedup bookkeeping cost a real notification
 
 
 def load_state():
@@ -433,11 +487,36 @@ def doctor(url, auth, auth_mode, summarizer):
         for f in sorted(set(found)):
             print("  {0}".format(f))
         if any("settings.json" in f for f in found) and any("(plugin)" in f for f in found):
-            print("  WARNING: registered BOTH ways -- you will get duplicate pushes."
-                  " Remove the settings.json entries, or uninstall the plugin.")
+            print("  note: registered both ways. Harmless -- whichever fires first"
+                  " wins and the other is suppressed -- but one is redundant.")
+        if plugin_events and not any("settings.json" in f for f in found):
+            print("  reminder: plugin hooks load when a session STARTS. A session"
+                  " already running when the plugin was installed does not have"
+                  " them; restart it if nothing is arriving.")
     else:
         print("  none active -- install the plugin, or register the hooks manually")
         ok = False
+
+    # Registration on disk is not proof anything fires: a session loads hooks at
+    # startup, so a correct-looking config can sit next to a session that has
+    # none. The last real send is the only evidence that the path works.
+    import time
+
+    last = None
+    for rec in (load_state() or {}).values():
+        if isinstance(rec, dict) and rec.get("ts"):
+            last = max(last or 0, rec["ts"])
+    if last:
+        age = time.time() - last
+        stamp = time.strftime("%H:%M:%S", time.localtime(last))
+        if age < 3600:
+            print("  last real send    {0} ({1:.0f} min ago)".format(stamp, age / 60))
+        else:
+            print("  last real send    {0} ({1:.1f} HOURS ago) -- if you have used"
+                  " Claude since, the hooks are not firing; restart the session"
+                  .format(stamp, age / 3600))
+    else:
+        print("  last real send    never -- no hook has completed a send yet")
 
     print("\nconnectivity")
     if url:
@@ -543,6 +622,8 @@ def main():
         fields = build(payload, summarizer, last_kind)
         if fields is None:
             return 0
+        if not claim_send(payload):
+            return 0  # another registration is already sending this one
 
     if args.dry_run:
         print(json.dumps(fields, ensure_ascii=False, indent=2))
