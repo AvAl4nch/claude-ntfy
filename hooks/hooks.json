@@ -6,9 +6,11 @@
           {
             "type": "command",
             "command": "python3",
-            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/ntfy_notify.py"],
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/ntfy_notify.py"
+            ],
             "async": true,
-            "timeout": 30,
+            "timeout": 60,
             "statusMessage": "Pushing ntfy notification"
           }
         ]
@@ -20,9 +22,11 @@
           {
             "type": "command",
             "command": "python3",
-            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/ntfy_notify.py"],
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/ntfy_notify.py"
+            ],
             "async": true,
-            "timeout": 30,
+            "timeout": 60,
             "statusMessage": "Pushing ntfy notification"
           }
         ]

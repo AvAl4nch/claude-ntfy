@@ -139,8 +139,7 @@ app goes quiet in exactly the same undramatic way.
 sentence, throws away filler openers, and cuts to six words. Instant and free.
 
 **`llm`** asks Haiku to write the summary instead. The phrasing is better — you
-get whole thoughts rather than sentences cut off mid-stride — but it adds five to
-ten seconds and a small token cost to *every single turn*. If the call fails it
+get whole thoughts rather than sentences cut off mid-stride — but it adds roughly ten to twenty seconds and a small token cost to *every single turn*. If the call fails it
 quietly falls back to the heuristic.
 
 Same input, both ways:
@@ -240,14 +239,14 @@ there:
       { "hooks": [ {
           "type": "command", "command": "python3",
           "args": ["/abs/path/to/claude-ntfy/scripts/ntfy_notify.py"],
-          "async": true, "timeout": 30
+          "async": true, "timeout": 60
       } ] }
     ],
     "Notification": [
       { "hooks": [ {
           "type": "command", "command": "python3",
           "args": ["/abs/path/to/claude-ntfy/scripts/ntfy_notify.py"],
-          "async": true, "timeout": 30
+          "async": true, "timeout": 60
       } ] }
     ]
   }
@@ -261,8 +260,9 @@ Three details worth getting right:
 - Merge carefully. A malformed `settings.json` silently disables *everything* in
   that file, not just this hook, so the damage from a bad edit is wider than you'd
   expect.
-- Keep `timeout` above 20 seconds. The `llm` summarizer can take that long, and a
-  shorter timeout kills it mid-call — the notification just vanishes.
+- Keep `timeout` above 45 seconds. The `llm` summarizer can take that long on a
+  slow run, and a shorter timeout kills it mid-call — you silently get the
+  truncated heuristic instead.
 
 Set your topic in `~/.claude/ntfy-notify.json` as described above.
 
@@ -298,8 +298,16 @@ Send a real one:
 python3 scripts/ntfy_notify.py --test
 ```
 
-`evals/payloads.jsonl` has sample payloads covering prose, markdown tables, code
-fences, terse one-word replies, and the cases that should stay silent.
+Run the whole suite — 28 checks covering duplicate suppression under real
+concurrency, auth encoding, summary grounding, and which events stay silent:
+
+```bash
+python3 tests/run_tests.py
+```
+
+It uses a throwaway local server, so it never touches a real topic.
+
+`evals/payloads.jsonl` has the sample payloads it feeds through.
 
 ## License
 

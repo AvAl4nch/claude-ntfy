@@ -49,14 +49,14 @@ Only for someone who wants the script alone. Register both hooks in
       { "hooks": [ {
           "type": "command", "command": "python3",
           "args": ["<abs-path>/scripts/ntfy_notify.py"],
-          "async": true, "timeout": 30
+          "async": true, "timeout": 60
       } ] }
     ],
     "Notification": [
       { "hooks": [ {
           "type": "command", "command": "python3",
           "args": ["<abs-path>/scripts/ntfy_notify.py"],
-          "async": true, "timeout": 30
+          "async": true, "timeout": 60
       } ] }
     ]
   }
@@ -70,8 +70,9 @@ Three things to get right, each of which has bitten this setup:
 - **Merge, never overwrite.** A malformed `settings.json` silently disables every
   setting in that file, not just the hook -- so the blast radius of a bad edit is
   much larger than it looks.
-- **`timeout` must clear the summarizer.** The `llm` summarizer can take 20s; a
-  shorter timeout kills it mid-call and the notification is lost silently.
+- **`timeout` must clear the summarizer.** The `llm` summarizer can take 45s; a
+  shorter timeout kills it mid-call and the summary silently degrades to the
+  truncated heuristic the user opted out of.
 
 Settings are watched live, but a session that started before the file existed may
 not pick them up. If nothing fires, have the user open `/hooks` once or restart.

@@ -37,10 +37,13 @@ DEFAULT_URL = None
 DEFAULT_SUMMARIZER = "heuristic"  # or "llm"
 SUMMARY_WORDS = 6
 HTTP_TIMEOUT = 8
-# The llm summarizer shells out to `claude -p`, which is CLI-startup dominated
-# (~5-10s observed). Keep this comfortably under the hook's own timeout, or the
-# harness kills us mid-call and the notification is lost silently.
-LLM_TIMEOUT = 20
+# The llm summarizer shells out to `claude -p`, which is CLI-startup dominated.
+# Measured 8-20s on a warm machine, so a 20s cap clipped the slow tail and fell
+# back to the heuristic exactly when a summary was hardest to truncate well.
+# The hook is async, so a slow summary costs nobody anything except arriving a
+# few seconds later -- much cheaper than the truncation the user opted out of.
+# Keep the hook's own timeout above this or the harness kills us mid-call.
+LLM_TIMEOUT = 45
 CONFIG_PATH = Path.home() / ".claude" / "ntfy-notify.json"
 LOG_PATH = Path.home() / ".claude" / "ntfy-notify.log"
 STATE_PATH = Path.home() / ".claude" / "ntfy-notify.state.json"
@@ -118,6 +121,20 @@ def condense(text, limit=SUMMARY_WORDS):
     return out + "…" if truncated else out.rstrip(".")
 
 
+def grounded(summary, source):
+    """True if the summary actually refers to the source text.
+
+    Small models occasionally answer a short, context-free prompt with something
+    like "Nothing accomplished yet" -- fluent, confident and wrong. That is worse
+    than a truncated heuristic, because a truncated summary is still true. Any
+    real summary reuses at least one substantial word from what it summarises, so
+    require that and fall back when it is missing.
+    """
+    words = lambda s: set(re.findall(r"[a-z0-9]{4,}", s.lower()))
+    src = words(source)
+    return bool(src & words(summary)) if src else True
+
+
 def llm_condense(text, limit=SUMMARY_WORDS):
     """Optional: ask Haiku for the summary. Better phrasing, costs a call.
 
@@ -126,8 +143,10 @@ def llm_condense(text, limit=SUMMARY_WORDS):
     import subprocess
 
     prompt = (
-        "Summarize what was just accomplished in at most {n} words. "
-        "It must be a complete phrase, not a truncated one. "
+        "The text below is an assistant's report of work it has ALREADY finished. "
+        "Summarize what was accomplished in at most {n} words. "
+        "It must be a complete phrase, not a truncated one, and it must describe "
+        "the actual work -- never reply that nothing was accomplished.\n"
         "Reply with only the summary: no preamble, no quotes, no trailing period.\n\n"
         "---\n{body}"
     ).format(n=limit, body=text[:4000])
@@ -138,11 +157,12 @@ def llm_condense(text, limit=SUMMARY_WORDS):
         )
         lines = [ln.strip() for ln in out.stdout.splitlines() if ln.strip()]
         if out.returncode == 0 and lines:
-            words = lines[0].strip().strip("\"'").rstrip(".").split()
+            candidate = lines[0].strip().strip("\"'").rstrip(".")
+            words = candidate.split()
             # Allow a little slack: a whole thought one word over budget beats a
             # fragment. A big overrun means the model ignored the brief, and the
             # heuristic's truncation is at least predictable.
-            if words and len(words) <= limit + 2:
+            if words and len(words) <= limit + 2 and grounded(candidate, text):
                 return " ".join(words)
     except Exception:
         pass
@@ -181,6 +201,23 @@ def read_last_assistant_message(transcript_path):
 def project_name(payload):
     cwd = payload.get("cwd") or ""
     return Path(cwd).name or "claude"
+
+
+def should_notify(payload, last_kind=None):
+    """Cheap yes/no, with no summarising. Kept separate from build() so the
+    duplicate lock can be claimed BEFORE the expensive llm call -- otherwise two
+    registrations each pay for a summary and then throw one away."""
+    event = payload.get("hook_event_name") or ""
+    if event == "Stop":
+        return not payload.get("stop_hook_active")
+    if event == "Notification":
+        kind = payload.get("notification_type") or ""
+        if kind and kind not in WAITING_TYPES:
+            return False
+        if kind == "idle_prompt" and last_kind in ("stop", "waiting"):
+            return False
+        return True
+    return False
 
 
 def build(payload, summarizer, last_kind=None):
@@ -619,11 +656,15 @@ def main():
         session_id = payload.get("session_id")
         state = load_state()
         last_kind = (state.get(session_id) or {}).get("kind") if session_id else None
-        fields = build(payload, summarizer, last_kind)
-        if fields is None:
+        # Decide, then claim, then summarise. Claiming first means a duplicate
+        # registration bails out before spending a model call it would discard.
+        if not should_notify(payload, last_kind):
             return 0
         if not claim_send(payload):
             return 0  # another registration is already sending this one
+        fields = build(payload, summarizer, last_kind)
+        if fields is None:
+            return 0
 
     if args.dry_run:
         print(json.dumps(fields, ensure_ascii=False, indent=2))
