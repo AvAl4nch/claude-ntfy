@@ -1,0 +1,12 @@
+{"_case":"stop/prose","hook_event_name":"Stop","cwd":"/p/ntfy_claude","last_assistant_message":"Sent and confirmed — publish path works end to end.\n\n- **ID:** `BlHk`"}
+{"_case":"stop/table-first","hook_event_name":"Stop","cwd":"/p/api","last_assistant_message":"| Check | Result |\n|---|---|\n| health | ok |\n\nAll three migrations applied cleanly against staging."}
+{"_case":"stop/filler-opener","hook_event_name":"Stop","cwd":"/p/web","last_assistant_message":"Perfect, I have fixed the failing authentication tests in the login module."}
+{"_case":"stop/terse","hook_event_name":"Stop","cwd":"/p/web","last_assistant_message":"Done."}
+{"_case":"stop/heading-first","hook_event_name":"Stop","cwd":"/p/infra","last_assistant_message":"## Summary\n\nRefactored the payment retry logic into a shared module."}
+{"_case":"stop/code-fence-first","hook_event_name":"Stop","cwd":"/p/cli","last_assistant_message":"```bash\nnpm run build\n```\n\nBuild now succeeds with zero warnings."}
+{"_case":"stop/no-field-uses-transcript","hook_event_name":"Stop","cwd":"/p/web","transcript_path":"/nonexistent.jsonl"}
+{"_case":"stop/reentrant-SILENT","hook_event_name":"Stop","stop_hook_active":true,"last_assistant_message":"should not send"}
+{"_case":"notification/permission","hook_event_name":"Notification","notification_type":"permission_prompt","cwd":"/p/web","message":"Claude needs your permission to use Bash"}
+{"_case":"notification/idle","hook_event_name":"Notification","notification_type":"idle_prompt","cwd":"/p/web","message":"Claude is waiting for your input"}
+{"_case":"notification/auth-SILENT","hook_event_name":"Notification","notification_type":"auth_success","cwd":"/p/web","message":"Logged in successfully"}
+{"_case":"unknown-event-SILENT","hook_event_name":"PreToolUse","cwd":"/p/web"}
