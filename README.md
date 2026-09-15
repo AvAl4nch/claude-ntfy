@@ -74,10 +74,64 @@ Everything lives in `~/.claude/ntfy-notify.json`:
 | What | Config key | Environment variable | Default |
 |---|---|---|---|
 | Where to send | `url` | `NTFY_CLAUDE_URL` | none — you must set this |
-| Auth, if your topic is private | `token` | `NTFY_CLAUDE_TOKEN` | none |
+| Access token | `token` | `NTFY_CLAUDE_TOKEN` | none |
+| Username / password | `username`, `password` | `NTFY_CLAUDE_USERNAME`, `NTFY_CLAUDE_PASSWORD` | none |
+| How credentials travel | `auth_mode` | `NTFY_CLAUDE_AUTH_MODE` | `header` |
 | How summaries are written | `summarizer` | `NTFY_CLAUDE_SUMMARIZER` | `heuristic` |
 
 A command-line flag beats an environment variable, which beats the config file.
+
+### If your server needs a password
+
+All of ntfy's auth styles work. Pick whichever your server uses.
+
+An access token:
+
+```json
+{ "url": "https://ntfy.example.com/alerts", "token": "tk_AgQdq7mVBoFD37zQ" }
+```
+
+A username and password:
+
+```json
+{ "url": "https://ntfy.example.com/alerts", "username": "alice", "password": "hunter2" }
+```
+
+Both go out as a normal `Authorization` header — `Bearer` for a token, `Basic`
+for a username. That also covers the case where the auth isn't ntfy's at all but
+a reverse proxy in front of it, since that's the same header.
+
+If you paste a `user:pass` string into the `token` field by mistake, it does the
+right thing and sends Basic rather than failing cryptically.
+
+**When credentials seem right but nothing arrives**, some proxies, CDNs and
+corporate gateways strip the `Authorization` header before it reaches ntfy. ntfy
+has a fallback that carries it in the URL instead:
+
+```json
+{ "auth_mode": "query" }
+```
+
+You don't have to figure this out yourself. When `--doctor` sees a 401 it retries
+the other way and tells you which one worked:
+
+```
+publish    HTTP 401 Unauthorized
+RETRY OK with auth_mode='query' -- your current mode is not reaching the
+server (a proxy is likely stripping it). Set "auth_mode": "query" in ...
+```
+
+If both fail, it says that too — which means the credentials themselves are
+wrong, not the delivery.
+
+Worth knowing before you reach for it: a credential in the query string can end
+up in server access logs and proxy logs, where a header wouldn't. It's still sent
+over TLS, so it isn't exposed in transit, but `header` is the better default and
+`query` is the fallback for when the header genuinely can't get through.
+
+One thing this can't do for you: if you lock down a topic, **the ntfy app on your
+phone needs the same credentials**. Add the server login there as well, or the
+app goes quiet in exactly the same undramatic way.
 
 ### Picking a summarizer
 
@@ -126,7 +180,7 @@ A few things it commonly catches:
 |---|---|
 | Nothing arrives at all | No topic configured, or the plugin didn't install. `--doctor` says which. |
 | `HTTP 403` in the log | A firewall or WAF — Cloudflare especially — rejecting the request. |
-| `HTTP 401` on a private topic | Your token is missing or expired. |
+| `HTTP 401` on a private topic | Missing, wrong, or stripped credentials. `--doctor` distinguishes the three. |
 | Publish says 200, phone stays quiet | It reached the server fine. Check the app is subscribed to that exact topic and allowed to notify in the background. |
 | Two pushes for everything | The hooks are registered twice, usually plugin *and* manual. `--doctor` warns about this. |
 

@@ -10,12 +10,18 @@ than a notifier that misses a message.
 
 Config resolution (first hit wins):
   1. CLI flags
-  2. environment: NTFY_CLAUDE_URL, NTFY_CLAUDE_TOKEN, NTFY_CLAUDE_SUMMARIZER
+  2. environment: NTFY_CLAUDE_URL, NTFY_CLAUDE_TOKEN, NTFY_CLAUDE_USERNAME,
+     NTFY_CLAUDE_PASSWORD, NTFY_CLAUDE_AUTH_MODE, NTFY_CLAUDE_SUMMARIZER
   3. config file: ~/.claude/ntfy-notify.json
   4. built-in defaults below
+
+Auth: anonymous, Bearer token, or Basic username/password -- and either sent in
+the Authorization header (default) or in ntfy's ?auth= query parameter, for the
+proxies that strip that header. See resolve_auth() and auth_query_param().
 """
 
 import argparse
+import base64
 import json
 import os
 import re
@@ -264,6 +270,56 @@ def log(line):
         pass
 
 
+def resolve_auth(token=None, username=None, password=None):
+    """Build the Authorization header value ntfy expects, or None if anonymous.
+
+    ntfy accepts three shapes, and servers in the wild use all of them:
+      - Bearer <token>                    access tokens
+      - Basic base64(user:pass)           username/password
+      - Basic base64(token:)              a token used in the Basic slot
+    A reverse proxy sitting in front of ntfy also commonly wants plain Basic,
+    which is the same header, so that case falls out for free.
+    """
+    if username:
+        raw = "{0}:{1}".format(username, password or "")
+        return "Basic " + base64.b64encode(raw.encode("utf-8")).decode("ascii")
+    if token:
+        # A "user:pass" pasted into the token field is a common slip, and sending
+        # it as a Bearer token fails in the least obvious way possible. Real ntfy
+        # tokens are tk_-prefixed and contain no colon, so this is unambiguous.
+        if ":" in token and not token.startswith("tk_"):
+            return "Basic " + base64.b64encode(token.encode("utf-8")).decode("ascii")
+        return "Bearer " + token
+    return None
+
+
+def auth_query_param(header_value):
+    """Encode an Authorization value for ntfy's ?auth= parameter.
+
+    Some proxies, CDNs and corporate gateways strip the Authorization header
+    outright; ntfy's fallback carries it in the query string instead. The value
+    is the WHOLE header ("Basic abc..."), base64url-encoded with padding removed
+    -- Go's base64.RawURLEncoding, which is what the server decodes with.
+    """
+    encoded = base64.urlsafe_b64encode(header_value.encode("utf-8")).decode("ascii")
+    return encoded.rstrip("=")
+
+
+def describe_auth(header_value):
+    """Human-readable auth summary that never prints the secret itself."""
+    if not header_value:
+        return "none (anonymous)"
+    scheme = header_value.split(" ", 1)[0]
+    if scheme == "Basic":
+        try:
+            user = base64.b64decode(header_value.split(" ", 1)[1]).decode("utf-8", "replace")
+            user = user.split(":", 1)[0]
+            return "Basic (user {0!r})".format(user)
+        except Exception:
+            return "Basic"
+    return "Bearer (token ending {0})".format(header_value[-4:])
+
+
 def split_topic_url(url):
     """Split "https://host/topic" into ("https://host", "topic").
 
@@ -275,7 +331,8 @@ def split_topic_url(url):
     return base, topic
 
 
-def publish(url, token, fields):
+def publish(url, auth, fields, auth_mode="header"):
+    """POST one notification. `auth` is a full Authorization value or None."""
     base, topic = split_topic_url(url)
     if not topic:
         return False, "cannot parse topic from URL {0!r}".format(url)
@@ -291,10 +348,15 @@ def publish(url, token, fields):
         # Cloudflare (and most WAFs) 403 the default "Python-urllib/3.x" agent.
         "User-Agent": "ntfy-notify/1.0 (+claude-code-hook)",
     }
-    if token:
-        headers["Authorization"] = "Bearer {0}".format(token)
+    target = base
+    if auth:
+        if auth_mode == "query":
+            sep = "&" if "?" in target else "?"
+            target = "{0}{1}auth={2}".format(target, sep, auth_query_param(auth))
+        else:
+            headers["Authorization"] = auth
     req = urllib.request.Request(
-        base, data=json.dumps(body).encode("utf-8"), method="POST", headers=headers,
+        target, data=json.dumps(body).encode("utf-8"), method="POST", headers=headers,
     )
     try:
         with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
@@ -305,7 +367,7 @@ def publish(url, token, fields):
         return False, "{0}: {1}".format(type(exc).__name__, exc)
 
 
-def doctor(url, token, summarizer):
+def doctor(url, auth, auth_mode, summarizer):
     """Explain why notifications are or aren't arriving.
 
     Worth having because this script is deliberately silent on failure: without
@@ -323,7 +385,8 @@ def doctor(url, token, summarizer):
     print("\nconfig")
     print("  file       {0}{1}".format(CONFIG_PATH, "" if CONFIG_PATH.exists() else "  (absent)"))
     print("  topic URL  {0}".format(url or "NOT SET -- nothing will be sent"))
-    print("  token      {0}".format("set" if token else "none (public topic)"))
+    print("  auth       {0}".format(describe_auth(auth)))
+    print("  auth mode  {0}".format(auth_mode))
     print("  summarizer {0}".format(summarizer))
     if not url:
         ok = False
@@ -378,12 +441,32 @@ def doctor(url, token, summarizer):
 
     print("\nconnectivity")
     if url:
-        sent, detail = publish(url, token, {
+        probe = {
             "title": "ntfy-notify doctor",
             "body": "Self-check reached the server",
             "tags": "stethoscope", "priority": "1",  # min priority: no buzz
-        })
+        }
+        sent, detail = publish(url, auth, probe, auth_mode)
         print("  publish    {0}".format(detail))
+        if not sent and ("401" in detail or "403" in detail):
+            # Distinguish "wrong credentials" from "credentials never arrived".
+            # A proxy that strips Authorization looks exactly like a bad token
+            # until you try the query-param form, so try it and say which works.
+            if auth:
+                other = "query" if auth_mode == "header" else "header"
+                alt_sent, alt_detail = publish(url, auth, probe, other)
+                if alt_sent:
+                    print("  RETRY OK with auth_mode={0!r} -- your current mode is"
+                          " not reaching the server (a proxy is likely stripping"
+                          " it). Set \"auth_mode\": \"{0}\" in {1}"
+                          .format(other, CONFIG_PATH))
+                else:
+                    print("  also fails as auth_mode={0!r} ({1}) -- the credentials"
+                          " themselves are being rejected".format(other, alt_detail))
+            else:
+                print("  no credentials configured, but this topic requires them:"
+                      " set \"token\", or \"username\"/\"password\", in {0}"
+                      .format(CONFIG_PATH))
         ok = ok and sent
     else:
         print("  publish    skipped (no URL)")
@@ -402,7 +485,13 @@ def doctor(url, token, summarizer):
 def main():
     ap = argparse.ArgumentParser(description="ntfy notifier for Claude Code hooks")
     ap.add_argument("--url", help="ntfy topic URL")
-    ap.add_argument("--token", help="bearer token for protected topics")
+    ap.add_argument("--token", help="ntfy access token (sent as Bearer)")
+    ap.add_argument("--username", help="username for Basic auth")
+    ap.add_argument("--password", help="password for Basic auth")
+    ap.add_argument("--auth-mode", choices=["header", "query"], dest="auth_mode",
+                    help="send credentials in the Authorization header (default) "
+                         "or in ntfy's ?auth= query parameter, for proxies that "
+                         "strip the header")
     ap.add_argument("--summarizer", choices=["heuristic", "llm"],
                     help="how to shorten the result (default: heuristic)")
     ap.add_argument("--event", help="override hook_event_name (Stop | Notification)")
@@ -415,11 +504,18 @@ def main():
     cfg = load_config()
     url = args.url or os.environ.get("NTFY_CLAUDE_URL") or cfg.get("url") or DEFAULT_URL
     token = args.token or os.environ.get("NTFY_CLAUDE_TOKEN") or cfg.get("token")
+    username = (args.username or os.environ.get("NTFY_CLAUDE_USERNAME")
+                or cfg.get("username"))
+    password = (args.password or os.environ.get("NTFY_CLAUDE_PASSWORD")
+                or cfg.get("password"))
+    auth_mode = (args.auth_mode or os.environ.get("NTFY_CLAUDE_AUTH_MODE")
+                 or cfg.get("auth_mode") or "header")
+    auth = resolve_auth(token, username, password)
     summarizer = (args.summarizer or os.environ.get("NTFY_CLAUDE_SUMMARIZER")
                   or cfg.get("summarizer") or DEFAULT_SUMMARIZER)
 
     if args.doctor:
-        return doctor(url, token, summarizer)
+        return doctor(url, auth, auth_mode, summarizer)
 
     session_id = None
     state = {}
@@ -457,7 +553,7 @@ def main():
             "or NTFY_CLAUDE_URL. Nothing sent.".format(CONFIG_PATH))
         return 0
 
-    ok, detail = publish(url, token, fields)
+    ok, detail = publish(url, auth, fields, auth_mode)
     if ok:
         save_state(state, session_id, fields.get("_kind"))
     else:

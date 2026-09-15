@@ -87,7 +87,9 @@ Resolution order: CLI flag → env var → `~/.claude/ntfy-notify.json` → buil
 | Setting | Env var | Config key | Default |
 |---|---|---|---|
 | Topic URL | `NTFY_CLAUDE_URL` | `url` | *(none -- must be set)* |
-| Bearer token | `NTFY_CLAUDE_TOKEN` | `token` | none (public topic) |
+| Access token | `NTFY_CLAUDE_TOKEN` | `token` | none (anonymous) |
+| Username / password | `NTFY_CLAUDE_USERNAME` / `NTFY_CLAUDE_PASSWORD` | `username` / `password` | none |
+| Credential transport | `NTFY_CLAUDE_AUTH_MODE` | `auth_mode` | `header` (or `query`) |
 | Summarizer | `NTFY_CLAUDE_SUMMARIZER` | `summarizer` | `heuristic` |
 
 ```json
@@ -159,13 +161,31 @@ than one that misses a message. Failures are appended to
 `~/.claude/ntfy-notify.log` instead — that log is the first place to look when a
 push goes missing, because the silence is by design.
 
+## Authentication
+
+ntfy accepts a Bearer access token or Basic username/password, and the script
+supports both, plus either transport:
+
+- `token` -> `Authorization: Bearer <token>`
+- `username` + `password` -> `Authorization: Basic <base64>`
+- a `user:pass` string mistakenly put in `token` is detected and sent as Basic
+- `auth_mode: "query"` moves the credential into ntfy's `?auth=` parameter, for
+  proxies that strip the `Authorization` header. Prefer `header`: a query-string
+  credential can land in server and proxy access logs, where a header would not.
+  Suggest `query` only once `--doctor` shows the header is not getting through.
+
+Do not guess which is wrong when a user reports silence -- `--doctor` retries the
+opposite transport and distinguishes "credentials rejected" from "credentials
+never arrived". Remind the user that a locked-down topic also needs the
+credentials entered in their phone's ntfy app.
+
 ## Troubleshooting
 
 | Symptom | Cause |
 |---|---|
 | Nothing fires at all | Hook not registered, or session predates the settings file. Check `jq '.hooks.Stop' ~/.claude/settings.json`, then `/hooks` or restart. |
 | Log shows `HTTP 403` | A WAF (commonly Cloudflare) rejecting the client. The script sends its own `User-Agent` because the `Python-urllib/3.x` default gets blocked. |
-| Log shows `HTTP 401/403` on a private topic | Missing or expired `token`. |
+| Log shows `HTTP 401/403` on a private topic | Run `--doctor`: it retries the other `auth_mode` and reports whether the credentials are wrong, absent, or being stripped in transit by a proxy. |
 | Publish returns 200, no push on phone | Server-side delivery: check the topic name matches the phone's subscription, and that the app has background notifications enabled. |
 | Two pushes for one standstill | The idle-after-completion dedup relies on `~/.claude/ntfy-notify.state.json`. If that path is unwritable the fallback is to notify, so check permissions on it. |
 | Too many notifications | Drop the offending `notification_type` from `WAITING_TYPES`, or remove the `Notification` hook entirely to keep only completions. |
