@@ -1,73 +1,171 @@
-# ntfy-notify
+# claude-ntfy
 
-Push a [ntfy](https://ntfy.sh) notification to your phone when Claude Code
-finishes a turn or gets blocked waiting on you — with a short summary of what
-actually happened, so it's readable on a lock screen.
+*Claude Code finishes. Your phone tells you what happened.*
+
+You give Claude a long task, switch to something else, and then keep checking
+back to see if it's done. Or worse — it hit a permission prompt thirty seconds
+in and has been sitting there ever since.
+
+This sends a push to your phone at the two moments that actually matter, with a
+short summary so you can tell from the lock screen whether it's worth going back.
 
 ```
-✅  Claude finished · my-api          All three migrations applied to staging
-🤚  Claude needs you · my-api         Claude needs your permission to use…
+✅  Claude finished · my-api        All three migrations applied to staging
+🤚  Claude needs you · my-api       Claude needs your permission to use…
 ```
 
-| Moment | Hook event | Priority |
-|---|---|---|
-| Claude finished its turn | `Stop` | 3 (default) |
-| Claude is blocked on you | `Notification` | 4 (high) |
+The first arrives when a turn ends. The second when Claude is stuck waiting on
+you — and it comes in at high priority, because that one is costing you time.
 
-## Why hooks, not a skill
+## Getting started
 
-Claude can't reliably notify you that it stopped, because by the time it stops
-it is no longer running. Claude Code's harness fires `Stop` and `Notification`
-hooks, and `scripts/ntfy_notify.py` turns each hook payload into a push.
+You'll need [Claude Code](https://claude.com/claude-code), Python 3.8+ available
+as `python3`, and a ntfy topic — either on [ntfy.sh](https://ntfy.sh) or your own
+server. Install the [ntfy app](https://ntfy.sh/docs/subscribe/phone/) and
+subscribe to your topic.
 
-The bundled skill (`skills/ntfy-notify/`) exists so Claude can install, configure, and troubleshoot
-the thing on request — but the hooks are what actually do the work.
-
-## Requirements
-
-- Claude Code
-- Python 3.8+ on PATH as `python3` (standard library only — no dependencies)
-- A ntfy topic, either on [ntfy.sh](https://ntfy.sh) or a self-hosted server
-
-## Install
+Then, in Claude Code:
 
 ```
 /plugin marketplace add AvAl4nch/claude-ntfy
 /plugin install claude-ntfy
 ```
 
-Then tell Claude your topic:
+And tell Claude where to send things:
 
 > use https://ntfy.sh/my-topic as the ntfy server
 
-That's it. The plugin registers the `Stop` and `Notification` hooks itself, so
-there is no `settings.json` to edit and no absolute path to get wrong.
+That's the whole setup. The plugin wires up the hooks itself, so there's no
+config file to hand-edit and no paths to get right.
 
-**Nothing is sent until you set a topic.** There is no default on purpose: a
-baked-in URL would mean an unconfigured install publishes to a topic someone else
-owns, and ntfy topics are public by default, so that would leak your work
-summaries to strangers. Unconfigured, the script sends nothing and says so in its
-log.
+**One thing to know:** nothing gets sent until you set a topic. There's no
+default, deliberately — a built-in URL would mean every unconfigured install
+publishes to a topic somebody else owns, and ntfy topics are public by default.
+That's a quiet way to leak your work to strangers. Until you pick a topic, this
+does nothing and notes why in its log.
 
-Check it worked at any time:
+## Just ask for what you want
+
+The plugin includes a skill, so you don't have to remember any of the settings
+below. Say what you want in plain English:
+
+> use https://ntfy.example.com/alerts as the ntfy server
+
+> switch the summaries to the llm one, the truncated ones read badly
+
+> stop notifying me when you just need permission
+
+> my ntfy alerts stopped working
+
+Claude makes the change and dry-runs it before anything real gets sent. The rest
+of this README is for when you'd rather do it yourself.
+
+## Settings
+
+Everything lives in `~/.claude/ntfy-notify.json`:
+
+```json
+{
+  "url": "https://ntfy.sh/your-topic-here",
+  "summarizer": "heuristic"
+}
+```
+
+| What | Config key | Environment variable | Default |
+|---|---|---|---|
+| Where to send | `url` | `NTFY_CLAUDE_URL` | none — you must set this |
+| Auth, if your topic is private | `token` | `NTFY_CLAUDE_TOKEN` | none |
+| How summaries are written | `summarizer` | `NTFY_CLAUDE_SUMMARIZER` | `heuristic` |
+
+A command-line flag beats an environment variable, which beats the config file.
+
+### Picking a summarizer
+
+**`heuristic`** is the default. It strips the markdown, grabs the first real
+sentence, throws away filler openers, and cuts to six words. Instant and free.
+
+**`llm`** asks Haiku to write the summary instead. The phrasing is better — you
+get whole thoughts rather than sentences cut off mid-stride — but it adds five to
+ten seconds and a small token cost to *every single turn*. If the call fails it
+quietly falls back to the heuristic.
+
+Same input, both ways:
+
+| Claude said | `heuristic` | `llm` |
+|---|---|---|
+| "Perfect, I have fixed the failing authentication tests in the login module." | Fixed the failing authentication tests in… | Fixed failing authentication login tests |
+| "\| Check \| Result \|… All three migrations applied cleanly against staging." | All three migrations applied cleanly against… | All three migrations applied to staging |
+
+Start with `heuristic`. Switch if the truncation starts bothering you.
+
+The "needs you" notifications always use the heuristic — that text is short and
+fixed already, so there's nothing for a model to improve.
+
+## When something isn't working
+
+Start here:
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ntfy_notify.py" --doctor
 ```
 
-That reports your interpreter, your config, which hooks are actually live, and
-whether the server is reachable. It publishes at minimum priority, so it won't
-buzz your phone.
+It'll tell you which Python it found, what topic you're configured for, which
+hooks are actually live, and whether it can reach your server. It publishes at
+minimum priority, so running it won't buzz your phone.
+
+This matters more than it sounds, because **the notifier never reports failures
+out loud**. If it crashed or exited non-zero it would interrupt your Claude
+session, and a notifier that breaks your work is worse than one that misses a
+message. So when something goes wrong it exits quietly and writes to
+`~/.claude/ntfy-notify.log`. That silence is on purpose — `--doctor` and that log
+are how you see behind it.
+
+A few things it commonly catches:
+
+| What you see | What's going on |
+|---|---|
+| Nothing arrives at all | No topic configured, or the plugin didn't install. `--doctor` says which. |
+| `HTTP 403` in the log | A firewall or WAF — Cloudflare especially — rejecting the request. |
+| `HTTP 401` on a private topic | Your token is missing or expired. |
+| Publish says 200, phone stays quiet | It reached the server fine. Check the app is subscribed to that exact topic and allowed to notify in the background. |
+| Two pushes for everything | The hooks are registered twice, usually plugin *and* manual. `--doctor` warns about this. |
+
+## How it behaves, and why
+
+**You get one notification per thing that happens.** Claude Code raises an "idle"
+event about a minute after a turn ends, which would otherwise mean a "finished"
+push immediately followed by a "waiting for your input" push about the same
+standstill. The second one is dropped. It still comes through when it's genuinely
+the first thing worth telling you, and any real event resets that.
+
+**It ignores the boring events.** Login confirmations and quota messages fire on
+their own schedule and aren't worth a buzz, so only the ones needing a human get
+through.
+
+**It sends its own User-Agent.** Cloudflare and most WAFs reject Python's default
+one, which shows up as a mysterious silent 403. Learned that the hard way.
+
+**It posts via ntfy's JSON API** instead of the header-based one, because
+summaries contain em-dashes and other non-ASCII, and HTTP headers can't carry
+that cleanly.
+
+No dependencies — standard library only. Read
+[`scripts/ntfy_notify.py`](scripts/ntfy_notify.py) if you want the details; it's
+one file.
+
+## Installing without the plugin system
 
 <details>
-<summary>Manual install, without the plugin system</summary>
+<summary>If you'd rather just run the script</summary>
 
-For using the script on its own. Clone it, then merge both hooks into
-`~/.claude/settings.json`:
+Clone it:
 
 ```bash
 git clone https://github.com/AvAl4nch/claude-ntfy.git
 ```
+
+Add both hooks to `~/.claude/settings.json`, merging into whatever's already
+there:
 
 ```json
 {
@@ -90,124 +188,52 @@ git clone https://github.com/AvAl4nch/claude-ntfy.git
 }
 ```
 
-The `args` exec form spawns the interpreter directly, so Windows paths with
-spaces or backslashes never reach a shell parser. `async: true` keeps the push
-off the critical path. Merge carefully - a malformed `settings.json` silently
-disables every setting in that file, not just the hook.
+Three details worth getting right:
 
-Set your topic in `~/.claude/ntfy-notify.json`:
+- Use the `args` form rather than one long shell string — it runs the interpreter
+  directly, so Windows paths with spaces or backslashes never hit a shell parser.
+- Merge carefully. A malformed `settings.json` silently disables *everything* in
+  that file, not just this hook, so the damage from a bad edit is wider than you'd
+  expect.
+- Keep `timeout` above 20 seconds. The `llm` summarizer can take that long, and a
+  shorter timeout kills it mid-call — the notification just vanishes.
 
-```json
-{ "url": "https://ntfy.sh/your-topic-here", "summarizer": "heuristic" }
-```
+Set your topic in `~/.claude/ntfy-notify.json` as described above.
 
-To let Claude manage the thing for you, link the skill in as well:
+To let Claude manage the settings for you, link the skill in too:
 
 ```bash
 ln -s /abs/path/to/claude-ntfy/skills/ntfy-notify ~/.claude/skills/ntfy-notify
 ```
 
-On Windows use a junction instead:
+On Windows, a junction instead:
 
 ```powershell
 New-Item -ItemType Junction -Path "$HOME\.claude\skills\ntfy-notify" -Target "<repo>\skills\ntfy-notify"
 ```
 
-Don't do both - plugin hooks and manual hooks both fire, so every event pushes
-twice. `--doctor` detects that.
+Don't do this *and* install the plugin — both sets of hooks fire, and you'll get
+everything twice.
 
 </details>
 
-## Just tell Claude
+## Testing changes
 
-Installing the plugin also installs the skill, so you don't have to edit any of
-this by hand. Claude reads `SKILL.md` and makes the change for you — say what you
-want in plain language:
-
-> use https://ntfy.example.com/alerts as the ntfy server
-
-> switch the summaries to the llm one, the truncated ones read badly
-
-> my ntfy alerts stopped working
-
-> stop notifying me when you just need permission
-
-> the summaries are too short, make them longer
-
-Claude edits `~/.claude/ntfy-notify.json`, or the hook registration in
-`~/.claude/settings.json`, and verifies the change with a dry-run before sending
-anything real. The sections below document what it is actually changing, for when
-you'd rather do it yourself.
-
-## Configuration
-
-Resolution order: CLI flag → environment variable → config file → built-in default.
-
-| Setting | Env var | Config key | Default |
-|---|---|---|---|
-| Topic URL | `NTFY_CLAUDE_URL` | `url` | *(none — must be set)* |
-| Bearer token | `NTFY_CLAUDE_TOKEN` | `token` | none (public topic) |
-| Summarizer | `NTFY_CLAUDE_SUMMARIZER` | `summarizer` | `heuristic` |
-
-### Summarizers
-
-**`heuristic`** (default) strips markdown, takes the first prose sentence, drops
-filler openers, and truncates to six words. Instant, free, no network call.
-
-**`llm`** shells out to `claude -p` with Haiku. Phrasing is noticeably better —
-complete thoughts instead of truncations — but it adds ~5–10s and a token cost
-to **every turn**, and falls back to the heuristic if the call fails.
-
-| Input | `heuristic` | `llm` |
-|---|---|---|
-| "Perfect, I have fixed the failing authentication tests in the login module." | Fixed the failing authentication tests in… | Fixed failing authentication login tests |
-| "\| Check \| Result \|…All three migrations applied cleanly against staging." | All three migrations applied cleanly against… | All three migrations applied to staging |
-
-`Notification` always uses the heuristic — its text is already short and fixed,
-so there's nothing for a model to improve.
-
-## Testing
-
-Dry-run, so testing never spams your phone:
+Dry-run prints what would be sent without sending it:
 
 ```bash
 echo '{"hook_event_name":"Stop","cwd":"/p/demo","last_assistant_message":"Fixed the flaky login test."}' \
   | python3 scripts/ntfy_notify.py --dry-run
 ```
 
-One real send:
+Send a real one:
 
 ```bash
 python3 scripts/ntfy_notify.py --test
 ```
 
-`evals/payloads.jsonl` holds sample payloads covering prose, markdown tables,
-code fences, terse replies, and the cases that should stay silent.
-
-## Design notes
-
-**It never exits non-zero.** A notifier that breaks your session is worse than
-one that misses a message, so every failure path exits 0 and appends to
-`~/.claude/ntfy-notify.log`. That log is the first place to look when a push goes
-missing — the silence is deliberate.
-
-**One buzz per event.** Claude Code fires an `idle_prompt` notification a minute
-after a turn ends, which would mean a "finished" push followed by a redundant
-"waiting for your input" push for the same standstill. The idle nag is dropped
-whenever the session has already notified you; it still fires when it's the first
-thing worth saying, and any real event — a completion, a permission request —
-re-arms it. Per-session state lives in `~/.claude/ntfy-notify.state.json` and is
-pruned after a day.
-
-**It stays quiet** when `stop_hook_active` is set (a stop hook triggering a Stop
-would double-send), when the notification type isn't one a human needs to act on
-(`auth_success`, `quota_*`), and when stdin is empty or malformed.
-
-**It sends its own `User-Agent`.** Cloudflare and most WAFs reject the default
-`Python-urllib/3.x`, which shows up as a silent 403.
-
-**It posts via ntfy's JSON API** rather than the header API, because titles carry
-non-ASCII and HTTP headers are latin-1.
+`evals/payloads.jsonl` has sample payloads covering prose, markdown tables, code
+fences, terse one-word replies, and the cases that should stay silent.
 
 ## License
 
