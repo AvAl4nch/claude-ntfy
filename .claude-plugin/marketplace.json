@@ -1,5 +1,6 @@
 {
   "name": "claude-ntfy",
+  "description": "Phone notifications for Claude Code sessions, over ntfy.",
   "owner": {
     "name": "AvA_l4nch",
     "url": "https://github.com/AvAl4nch"
