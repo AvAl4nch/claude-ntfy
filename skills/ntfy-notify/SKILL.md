@@ -180,6 +180,33 @@ opposite transport and distinguishes "credentials rejected" from "credentials
 never arrived". Remind the user that a locked-down topic also needs the
 credentials entered in their phone's ntfy app.
 
+### When the user hands you credentials
+
+They will often just say it: *"my ntfy is at https://ntfy.example.com/alerts,
+user alice password hunter2"*. Set it up for them:
+
+1. **Merge into `~/.claude/ntfy-notify.json`, never overwrite it.** Read it
+   first. Clobbering the file silently drops their `url` or `summarizer` and the
+   breakage shows up much later, as silence.
+2. **Never write the secret back into the conversation.** Not in your reply, not
+   in a `cat` of the file, not in an echoed command. The transcript is stored on
+   disk and may be summarised or synced later, so a password repeated "just to
+   confirm" outlives the moment. Confirm by shape instead -- "token ending 7zQ",
+   "Basic auth as alice".
+3. **Verify with `--doctor`.** It prints `Bearer (token ending ...)` or
+   `Basic (user 'alice')`, never the credential itself, so its output is safe to
+   show. A `publish HTTP 200` line is the proof the credentials work.
+4. **Say plainly that the file is plaintext.** It is not a secret store. On a
+   shared machine suggest `chmod 600`, or the `NTFY_CLAUDE_TOKEN` /
+   `NTFY_CLAUDE_PASSWORD` environment variables instead, which keep the value
+   out of the file entirely.
+5. **Prefer an access token** when the user has the choice. It is scoped to
+   publishing and can be revoked on its own; an account password cannot.
+
+If the user pasted a credential into the chat, it is already in the transcript.
+Worth mentioning once, without alarm, so they can rotate it if that matters to
+them.
+
 ## Troubleshooting
 
 | Symptom | Cause |

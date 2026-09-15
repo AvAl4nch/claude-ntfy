@@ -20,11 +20,37 @@ you — and it comes in at high priority, because that one is costing you time.
 ## Getting started
 
 You'll need [Claude Code](https://claude.com/claude-code), Python 3.8+ available
-as `python3`, and a ntfy topic — either on [ntfy.sh](https://ntfy.sh) or your own
-server. Install the [ntfy app](https://ntfy.sh/docs/subscribe/phone/) and
-subscribe to your topic.
+as `python3`, and somewhere to send the notifications.
 
-Then, in Claude Code:
+### First, a ntfy topic
+
+[ntfy](https://ntfy.sh) is a pub-sub notification service. You publish to a
+*topic* — just a name in a URL — and anything subscribed to that topic gets the
+push. Two ways to get one:
+
+**Use the public server.** Go to [ntfy.sh](https://ntfy.sh), pick a topic name,
+and that's it — no account needed. Your URL is `https://ntfy.sh/<your-topic>`.
+Topic names are the only thing protecting them, so **choose something nobody
+would guess** (`ntfy.sh/claude` is effectively public). A random suffix like
+`claude-k7m2xq` is the difference between private and not. If you'd rather have
+real access control, [ntfy.sh offers accounts with
+reserved topics](https://ntfy.sh/app).
+
+**Or self-host it.** ntfy is a single Go binary and runs comfortably on anything,
+including a Raspberry Pi. The [self-hosting
+guide](https://docs.ntfy.sh/install/) covers Docker, systemd and the package
+managers; [access control](https://docs.ntfy.sh/config/#access-control) covers
+locking topics down with users and tokens. Worth it if you don't want your work
+summaries transiting someone else's server — which, given these messages
+describe what you're building, is a reasonable thing to care about.
+
+Either way, install the [ntfy app](https://ntfy.sh/docs/subscribe/phone/) on your
+phone and subscribe to the topic. There's also a [web
+client](https://ntfy.sh/app) and a desktop app if you'd rather not use a phone.
+
+### Then install the plugin
+
+In Claude Code:
 
 ```
 /plugin marketplace add AvAl4nch/claude-ntfy
@@ -34,6 +60,22 @@ Then, in Claude Code:
 And tell Claude where to send things:
 
 > use https://ntfy.sh/my-topic as the ntfy server
+
+If your server needs credentials, say so in the same breath — Claude writes them
+into the config for you:
+
+> my ntfy is https://ntfy.example.com/alerts, token tk_AgQdq7mVBoFD37zQ
+
+> use https://ntfy.example.com/alerts, username alice password hunter2
+
+It merges them into `~/.claude/ntfy-notify.json` without disturbing your other
+settings, then confirms with `--doctor` — which prints `Bearer (token ending
+7zQ)` rather than the credential itself. Two things worth knowing before you
+paste a password into a chat window: that file is **plaintext**, not a secret
+store, and anything you type to Claude lands in the session transcript. If either
+bothers you, use the `NTFY_CLAUDE_TOKEN` or `NTFY_CLAUDE_PASSWORD` environment
+variables instead and skip the file. An access token beats an account password
+either way — it only grants publishing, and you can revoke it on its own.
 
 That's the whole setup. The plugin wires up the hooks itself, so there's no
 config file to hand-edit and no paths to get right.
